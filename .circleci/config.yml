@@ -211,7 +211,6 @@ workflows:
             - build
 
       - push_latest:
-          context: icube-context
           filters:
             branches:
               only:
@@ -220,7 +219,6 @@ workflows:
             - build_docker_image
 
       - push_production:
-          context: icube-context
           filters:
             branches:
               only:
@@ -229,7 +227,6 @@ workflows:
             - build_docker_image
 
       - push_tagged:
-          context: icube-context
           filters:
             tags:
               only: /^v.*/
