@@ -1,0 +1,239 @@
+version: 2.1
+executors:
+  jdk-executor:
+    docker:
+      - image: circleci/openjdk:8-jdk
+    working_directory: ~/af-callback
+
+  docker-executor:
+    docker:
+      - image: docker:17.05.0-ce-git
+    environment:
+      MAVEN_OPTS: -Xmx3200m
+    working_directory: ~/af-callback
+
+jobs:
+  dependencies:
+    executor: jdk-executor
+    steps:
+      - checkout
+
+      - restore_cache:
+          key: AfCallback-{{ checksum "build.gradle" }}-{{ .Branch }}
+          keys:
+            - AF-{{ checksum "build.gradle" }}
+
+      - run:
+          name: Download dependencies
+          command: ./gradlew dependencies
+
+      - save_cache:
+          key: AfCallback-{{ checksum "build.gradle" }}-{{ .Branch }}
+          paths: ~/.gradle
+          keys:
+            - AF-{{ checksum "build.gradle" }}
+
+      - persist_to_workspace:
+          root: .
+          paths: .
+
+  test:
+    executor: jdk-executor
+    steps:
+      - attach_workspace:
+          at: .
+      - restore_cache:
+          key: AfCallback-{{ checksum "build.gradle" }}-{{ .Branch }}
+          keys:
+            - AF-{{ checksum "build.gradle" }}
+
+      - run:
+          name: Run Tests
+          command: ./gradlew test
+
+      - run:
+          name: Save test results
+          command: |
+            mkdir -p ~/junit/
+            find . -type f -regex ".*/target/surefire-reports/.*xml" -exec cp {} ~/junit/ \;
+          when: always
+
+      - store_test_results:
+          path: ~/junit
+
+      - store_artifacts:
+          path: ~/junit
+          destination: test-results
+
+      - store_artifacts:
+          path: target/site/jacoco
+          destination: coverage
+
+      - persist_to_workspace:
+          root: .
+          paths: .
+
+  build:
+    executor: jdk-executor
+    steps:
+      - attach_workspace:
+          at: .
+
+      - restore_cache:
+          key: AfCallback-{{ checksum "build.gradle" }}-{{ .Branch }}
+          keys:
+            - AF-{{ checksum "build.gradle" }}
+
+      - run:
+          name: Build africa's talking callback service app
+          command: ./gradlew bootJar
+
+      - persist_to_workspace:
+          root: .
+          paths: .
+
+  build_docker_image:
+    executor: jdk-executor
+    steps:
+      - setup_remote_docker
+
+      - attach_workspace:
+          at: .
+
+      - run:
+          name: Build app Docker image
+          command: |
+            docker build -t zoackadventure/af-callback:$CIRCLE_SHA1 .
+
+      - run:
+          name: Save app Docker image
+          command: |
+            docker save -o af-callback-image.tar zoackadventure/af-callback:$CIRCLE_SHA1
+      - persist_to_workspace:
+          root: .
+          paths: .
+
+  push_latest:
+    executor: docker-executor
+    steps:
+      - setup_remote_docker
+
+      - attach_workspace:
+          at: .
+
+      - run:
+          name: Load app Docker image
+          command: |
+            docker load --input af-callback-image.tar
+      - run:
+          name: Tag docker image
+          command: |
+            docker tag zoackadventure/af-callback:$CIRCLE_SHA1 zoackadventure/af-callback:latest
+      - run:
+          name: Push app Docker image
+          command: |
+            docker login -u $DOCKER_USER -p $DOCKER_PASS
+            docker push zoackadventure/af-callback:latest
+  push_tagged:
+    executor: docker-executor
+    steps:
+      - setup_remote_docker
+
+      - attach_workspace:
+          at: .
+
+      - run:
+          name: Load app Docker image
+          command: |
+            docker load --input af-callback-image.tar
+      - run:
+          name: Tag docker image
+          command: |
+            docker tag zoackadventure/af-callback:$CIRCLE_SHA1 zoackadventure/af-callback:$CIRCLE_TAG
+      - run:
+          name: Push app Docker image
+          command: |
+            docker login -u $DOCKER_USER -p $DOCKER_PASS
+            docker push zoackadventure/af-callback:$CIRCLE_TAG
+  push_production:
+    executor: docker-executor
+    steps:
+      - setup_remote_docker
+
+      - attach_workspace:
+          at: .
+
+      - run:
+          name: Load app Docker image
+          command: |
+            docker load --input af-callback-image.tar
+      - run:
+          name: Tag docker image
+          command: |
+            docker tag zoackadventure/af-callback:$CIRCLE_SHA1 zoackadventure/af-callback:production
+      - run:
+          name: Push app Docker image
+          command: |
+            docker login -u $DOCKER_USER -p $DOCKER_PASS
+            docker push zoackadventure/af-callback:production
+workflows:
+  version: 2
+  test_build_push_tag:
+    jobs:
+      - dependencies:
+          filters:
+            tags:
+              only: /^v.*/
+
+      - test:
+          filters:
+            tags:
+              only: /^v.*/
+          requires:
+            - dependencies
+
+      - build:
+          filters:
+            tags:
+              only: /^v.*/
+          requires:
+            - test
+
+      - build_docker_image:
+          filters:
+            tags:
+              only: /^v.*/
+            branches:
+              only:
+                - develop
+                - master
+          requires:
+            - build
+
+      - push_latest:
+          context: icube-context
+          filters:
+            branches:
+              only:
+                - develop
+          requires:
+            - build_docker_image
+
+      - push_production:
+          context: icube-context
+          filters:
+            branches:
+              only:
+                - master
+          requires:
+            - build_docker_image
+
+      - push_tagged:
+          context: icube-context
+          filters:
+            tags:
+              only: /^v.*/
+            branches:
+              ignore: /.*/
+          requires:
+            - build_docker_image
