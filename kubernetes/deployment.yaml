@@ -1,0 +1,25 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  namespace: zoack-payments
+  name: zoack-payments-service
+  labels:
+    name: zoack-payments-service
+    app: zoack-payments-service
+spec:
+  selector:
+    matchLabels:
+      app: zoack-payments-service
+  template:
+    metadata:
+      name: zoack-payments-service
+      labels:
+        name: zoack-payments-service
+        app: zoack-payments-service
+    spec:
+      containers:
+        - name: zoack-payments-service
+          imagePullPolicy: Always
+          image: zoackadventure/af-callback:latest
+          ports:
+            - containerPort: 8050
